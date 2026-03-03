@@ -220,13 +220,13 @@ class SpotDatabase:
             sql += " AND r_grid LIKE ?"
             params.append(ofgrid.upper() + "%")
 
-        if bycall:
-            sql += " AND s_call = ?"
-            params.append(bycall.upper())
+		if bycall:
+			sql += " AND r_call = ?"    # now receiver
+			params.append(bycall.upper())
 
-        if ofcall:
-            sql += " AND r_call = ?"
-            params.append(ofcall.upper())
+		if ofcall:
+			sql += " AND s_call = ?"    # now sender
+			params.append(ofcall.upper())
 
         sql += " ORDER BY t DESC"
 
