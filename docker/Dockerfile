@@ -66,7 +66,7 @@ EXPOSE 5000
 
 VOLUME ["/data"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=60s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/status')" || exit 1
 
 CMD ["python", "-m", "pskr_mqtt_cache", "--config", "/etc/pskr/config.yaml"]
