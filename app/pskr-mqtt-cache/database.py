@@ -72,7 +72,7 @@ class SpotDatabase:
         db.execute("""
             CREATE TABLE IF NOT EXISTS spots (
                 sq      INTEGER,                -- PSKReporter sequence number (may be absent)
-                t       INTEGER NOT NULL,       -- flowStartSeconds
+                t       INTEGER NOT NULL,       -- t_tx (normalized transmission start time)
                 s_grid  TEXT    NOT NULL DEFAULT '',
                 s_call  TEXT    NOT NULL DEFAULT '',
                 r_grid  TEXT    NOT NULL DEFAULT '',
@@ -104,7 +104,10 @@ class SpotDatabase:
         sq is optional — not all MQTT messages include it.
         """
         try:
-            t = spot.get("t")
+            # Prefer t_tx (normalized transmission start time) over t
+            # t_tx accounts for software differences in reporting decode vs tx time
+            # This ensures consistent deduplication across multiple receivers
+            t = spot.get("t_tx") or spot.get("t")
             if t is None:
                 return False   # timestamp is mandatory — skip silently
 
@@ -147,9 +150,10 @@ class SpotDatabase:
         for spot in spots:
             try:
                 sq = spot.get("sq")
+                t = spot.get("t_tx") or spot.get("t")
                 rows.append((
                     int(sq) if sq is not None else None,
-                    int(spot["t"]),
+                    int(t),
                     spot.get("sl", "")[:6].upper(),
                     spot.get("sc", ""),
                     spot.get("rl", "")[:6].upper(),
@@ -175,16 +179,27 @@ class SpotDatabase:
             return 0
 
     def prune(self) -> int:
-        """Delete spots older than max_age_sec. Returns rows deleted."""
+        """Delete spots older than max_age_sec in batches to avoid long write locks."""
         cutoff = int(time.time()) - self.max_age_sec
+        total = 0
+        batch_size = 10000
         try:
-            with self._conn() as db:
-                cur = db.execute("DELETE FROM spots WHERE t < ?", (cutoff,))
-                db.commit()
-                count = cur.rowcount
-                if count:
-                    log.info("Pruned %d spots older than %dh", count, self.max_age_sec // 3600)
-                return count
+            while True:
+                with self._conn() as db:
+                    cur = db.execute(
+                        "DELETE FROM spots WHERE t < ? LIMIT ?",
+                        (cutoff, batch_size)
+                    )
+                    db.commit()
+                    count = cur.rowcount
+                    total += count
+                    if count < batch_size:
+                        break
+                # Brief pause between batches to yield to MQTT writer
+                time.sleep(0.05)
+            if total:
+                log.info("Pruned %d spots older than %dh", total, self.max_age_sec // 3600)
+            return total
         except Exception as exc:
             log.error("Prune error: %s", exc)
             return 0
@@ -221,11 +236,11 @@ class SpotDatabase:
             params.append(ofgrid.upper() + "%")
 
         if bycall:
-            sql += " AND r_call = ?"    # now receiver
+            sql += " AND r_call = ?"
             params.append(bycall.upper())
 
         if ofcall:
-            sql += " AND s_call = ?"    # now sender
+            sql += " AND s_call = ?"
             params.append(ofcall.upper())
 
         sql += " ORDER BY t DESC"
