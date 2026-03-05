@@ -21,10 +21,14 @@ class Pruner:
 
     def _run(self):
         log.info("Pruner started (interval=%ds)", self.interval)
+        # Prune immediately on startup to clean stale data from volume
+        self.db.prune()
+        self.db.incremental_vacuum()
         while self._running:
             time.sleep(self.interval)
             if self._running:
                 self.db.prune()
+                self.db.incremental_vacuum()
 
     def start(self):
         self._running = True
