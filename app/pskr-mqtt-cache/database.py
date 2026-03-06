@@ -110,10 +110,9 @@ class SpotDatabase:
         sq is optional — not all MQTT messages include it.
         """
         try:
-            # Prefer t_tx (normalized transmission start time) over t
-            # t_tx accounts for software differences in reporting decode vs tx time
-            # This ensures consistent deduplication across multiple receivers
-            t = spot.get("t_tx") or spot.get("t")
+            # Use t (decode time) — consistent with CSI behavior
+            # Fall back to t_tx if t is absent
+            t = spot.get("t") or spot.get("t_tx")
             if t is None:
                 return False   # timestamp is mandatory — skip silently
 
@@ -122,7 +121,11 @@ class SpotDatabase:
             snr  = spot.get("rp")
             sl   = spot.get("sl") or ""
             rl   = spot.get("rl") or ""
-            mode = spot.get("md") or ""
+
+            # Normalize mode and callsigns — prevents dedup failures from case/whitespace
+            mode = (spot.get("md") or "").strip().upper()
+            sc   = (spot.get("sc") or "").strip().upper()
+            rc   = (spot.get("rc") or "").strip().upper()
 
             with self._conn() as db:
                 cur = db.execute("""
@@ -133,9 +136,9 @@ class SpotDatabase:
                     int(sq)   if sq   is not None else None,
                     int(t),
                     sl[:6].upper(),
-                    spot.get("sc") or "",
+                    sc,
                     rl[:6].upper(),
-                    spot.get("rc") or "",
+                    rc,
                     mode,
                     int(freq) if freq is not None else 0,
                     int(snr)  if snr  is not None else 0,
@@ -157,21 +160,26 @@ class SpotDatabase:
         for spot in spots:
             try:
                 sq   = spot.get("sq")
-                t    = spot.get("t_tx") or spot.get("t")
+                t    = spot.get("t") or spot.get("t_tx")
                 if t is None:
                     continue
-                mode = spot.get("md") or ""
                 freq = spot.get("f")
                 snr  = spot.get("rp")
                 sl   = spot.get("sl") or ""
                 rl   = spot.get("rl") or ""
+
+                # Normalize mode and callsigns
+                mode = (spot.get("md") or "").strip().upper()
+                sc   = (spot.get("sc") or "").strip().upper()
+                rc   = (spot.get("rc") or "").strip().upper()
+
                 rows.append((
                     int(sq)   if sq   is not None else None,
                     int(t),
                     sl[:6].upper(),
-                    spot.get("sc") or "",
+                    sc,
                     rl[:6].upper(),
-                    spot.get("rc") or "",
+                    rc,
                     mode,
                     int(freq) if freq is not None else 0,
                     int(snr)  if snr  is not None else 0,

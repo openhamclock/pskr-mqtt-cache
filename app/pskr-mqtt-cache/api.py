@@ -9,7 +9,7 @@ Endpoints:
       ofgrid  — receiver Maidenhead grid prefix
       maxage  — seconds back from now (default 900, max 86400)
     Returns: plain text CSV, one spot per line, same format as HamClock expects:
-      flowStartSeconds,senderLocator,senderCallsign,receiverLocator,receiverCallsign,mode,frequency,sNR
+      flowStartSeconds,receiverLocator,receiverCallsign,senderLocator,senderCallsign,mode,frequency,sNR
 
   GET /status
     Returns JSON with service health, DB stats, and MQTT connection state.
@@ -78,7 +78,7 @@ def valid_call(c: str) -> bool:
     description="""
 Returns spots in HamClock wire format (CSV, one spot per line):
 
-    flowStartSeconds,senderLocator,senderCallsign,receiverLocator,receiverCallsign,mode,frequency,sNR
+    flowStartSeconds,receiverLocator,receiverCallsign,senderLocator,senderCallsign,mode,frequency,sNR
 
 At least one of `bygrid`, `ofgrid`, `bycall`, or `ofcall` must be provided.
     """,
@@ -121,7 +121,7 @@ def get_spots(
     )
 
     lines = [
-        f"{r['t']},{r['s_grid']},{r['s_call']},{r['r_grid']},{r['r_call']},{r['mode']},{r['freq']},{r['snr']}"
+        f"{r['t']},{r['r_grid']},{r['r_call']},{r['s_grid']},{r['s_call']},{r['mode']},{r['freq']},{r['snr']}"
         for r in rows
     ]
     return PlainTextResponse("\n".join(lines) + "\n" if lines else "")
