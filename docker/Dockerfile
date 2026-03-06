@@ -5,15 +5,14 @@ FROM python:3.12-slim-bookworm AS builder
 
 WORKDIR /build
 
+# Copy and install Python dependencies into a prefix we can copy over
+COPY requirements.txt .
 # Install build deps needed to compile any C extensions in requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         libsqlite3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy and install Python dependencies into a prefix we can copy over
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
