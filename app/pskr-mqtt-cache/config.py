@@ -26,8 +26,8 @@ class MQTTConfig:
 @dataclass
 class DatabaseConfig:
     path: str = "/var/lib/pskr-mqtt-cache/spots.db"
-    max_age_hours: int = 24
-    prune_interval_minutes: int = 5
+    max_age_hours: int = 7
+    prune_interval_minutes: int = 15
     cache_size_mb: int = 64
 
 

@@ -209,7 +209,7 @@ class SpotDatabase:
             while True:
                 with self._conn() as db:
                     cur = db.execute(
-                        "DELETE FROM spots WHERE t < ? LIMIT ?",
+                        "DELETE FROM spots WHERE t < ? ORDER BY t ASC LIMIT ?",
                         (cutoff, batch_size)
                     )
                     db.commit()
