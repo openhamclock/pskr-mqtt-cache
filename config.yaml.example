@@ -12,8 +12,8 @@ mqtt:
 
 database:
   path: /data/spots.db
-  max_age_hours: 24
-  prune_interval_minutes: 5
+  max_age_hours: 7
+  prune_interval_minutes: 10
   # WAL mode is always enabled for concurrent read/write performance
   cache_size_mb: 64
 
