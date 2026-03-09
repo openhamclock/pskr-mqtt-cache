@@ -74,7 +74,6 @@ class SpotDatabase:
         # Enable incremental auto_vacuum so freed pages can be reclaimed
         # without a full VACUUM. Must be set before table creation to take effect
         # on new databases. Existing databases require one offline VACUUM first.
-        db.execute("PRAGMA auto_vacuum=INCREMENTAL")
         db.execute("""
             CREATE TABLE IF NOT EXISTS spots (
                 sq      INTEGER,                -- PSKReporter sequence number (may be absent)
@@ -89,6 +88,7 @@ class SpotDatabase:
                 PRIMARY KEY (t, s_call, r_call, freq)
             )
         """)
+        db.execute("PRAGMA auto_vacuum = INCREMENTAL")
 
         # Indexes for the two HamClock query patterns
         db.execute("CREATE INDEX IF NOT EXISTS idx_r_grid ON spots(r_grid)")
