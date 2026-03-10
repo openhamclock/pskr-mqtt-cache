@@ -278,9 +278,7 @@ class SpotDatabase:
 
         try:
             with self._conn() as db:
-                # Use a context manager for the cursor itself
-                with db.execute(sql, params) as cur:
-                    return cur.fetchall()
+                curr = db.execute(sql, params)
                 return cur.fetchall()
         except Exception as exc:
             log.error("Query error: %s", exc)
