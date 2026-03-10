@@ -229,7 +229,16 @@ class SpotDatabase:
                 log.info("Pruned %d spots older than %dh", total, self.max_age_sec // 3600)
                 # Force a checkpoint to move all that deleted space back to the DB
                 with self._conn() as db:
-                    db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    # Use FULL checkpoint mode. PASSIVE is a no-op if another connection
+                    # is writing, which is likely. FULL waits for writers to finish,
+                    # ensuring the checkpoint runs. This is critical for moving deleted
+                    # pages from the WAL to the main DB freelist so that
+                    # incremental_vacuum can reclaim the space. It does not block readers.
+                    res = db.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
+                    if res and res[2] > 0:
+                        log.info("Checkpointed %d pages from WAL to main database.", res[2])
+                    else:
+                        log.info("WAL checkpoint ran, but no pages were moved (busy=%s, log=%s, checkpointed=%s).", res[0], res[1], res[2])
             return total
         except Exception as exc:
             log.error("Prune error: %s", exc)
@@ -278,7 +287,7 @@ class SpotDatabase:
 
         try:
             with self._conn() as db:
-                curr = db.execute(sql, params)
+                cur = db.execute(sql, params)
                 return cur.fetchall()
         except Exception as exc:
             log.error("Query error: %s", exc)
@@ -288,14 +297,36 @@ class SpotDatabase:
         """Reclaim up to `pages` freed pages from the database file.
         Called after pruning to gradually shrink the file without downtime."""
         try:
-        try:
             with self._conn() as db:
                 before = db.execute("PRAGMA freelist_count;").fetchone()[0]
+                if before == 0:
+                    return
+
+                # incremental_vacuum must be run outside a transaction.
+                # Setting isolation_level to None enables autocommit mode.
+                original_isolation_level = db.isolation_level
                 db.isolation_level = None
-                db.execute(f"PRAGMA incremental_vacuum({pages});")
-                db.isolation_level = ""
-                kb_used = (before * 4096) / 1024
-                log.info(f"freelist {before} pages, (~{kb_used} KB)")
+                try:
+                    # We must consume the result for the pragma to execute.
+                    # When pages is 0 (the default), we want to vacuum all free pages.
+                    # This is achieved by omitting the argument to the pragma, as
+                    # `PRAGMA incremental_vacuum(0)` would vacuum zero pages.
+                    vacuum_sql = "PRAGMA incremental_vacuum"
+                    if pages > 0:
+                        vacuum_sql += f"({pages})"
+                    # We must consume all results for the pragma to run to completion.
+                    # fetchone() may cause it to stop after processing a small number
+                    # of pages. fetchall() ensures the entire freelist is processed.
+                    db.execute(vacuum_sql + ";").fetchall()
+                finally:
+                    db.isolation_level = original_isolation_level
+
+                after = db.execute("PRAGMA freelist_count;").fetchone()[0]
+                pages_recovered = before - after
+                if pages_recovered > 0:
+                    page_size = db.execute("PRAGMA page_size").fetchone()[0]
+                    kb_recovered = (pages_recovered * page_size) / 1024
+                    log.info(f"Cleaned {pages_recovered} pages (~{kb_recovered:.0f} KB); Remaining: {after}")
 
         except Exception as exc:
             log.error("Incremental vacuum error: %s", exc)
@@ -312,6 +343,6 @@ class SpotDatabase:
         try:
             with self._conn() as db:
                 row = db.execute("SELECT MIN(t), MAX(t) FROM spots").fetchone()
-                return row[0], row[1]
+                return (row[0], row[1]) if row else (None, None)
         except Exception:
             return None, None
