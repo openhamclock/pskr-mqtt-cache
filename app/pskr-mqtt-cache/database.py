@@ -288,9 +288,12 @@ class SpotDatabase:
         """Reclaim up to `pages` freed pages from the database file.
         Called after pruning to gradually shrink the file without downtime."""
         try:
+        try:
             with self._conn() as db:
                 before = db.execute("PRAGMA freelist_count;").fetchone()[0]
+                db.isolation_level = None
                 db.execute(f"PRAGMA incremental_vacuum({pages});")
+                db.isolation_level = ""
                 kb_used = (before * 4096) / 1024
                 log.info(f"freelist {before} pages, (~{kb_used} KB)")
 
