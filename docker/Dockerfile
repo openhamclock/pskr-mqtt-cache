@@ -1,7 +1,7 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
 # Install dependencies in a separate stage so build tools don't end up
 # in the final image.
-FROM debian:13.3-slim AS builder
+FROM debian:13.4-slim AS builder
 
 WORKDIR /build
 
@@ -16,7 +16,7 @@ RUN apt update && \
     pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
-FROM debian:13.3-slim AS runtime
+FROM debian:13.4-slim AS runtime
 
 WORKDIR /app
 
