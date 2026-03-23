@@ -30,23 +30,22 @@ RUN apt update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# ── Application ───────────────────────────────────────────────────────────────
+ARG GIT_VERSION
+
 COPY app/pskr-mqtt-cache/ ./pskr_mqtt_cache/
+COPY config.yaml.example /etc/pskr/config.yaml
 
 # ── Non-root user ─────────────────────────────────────────────────────────────
 # Never run as root inside the container
-RUN groupadd --gid 1001 pskr \
- && useradd  --uid 1001 --gid pskr --no-create-home --shell /sbin/nologin pskr
+RUN groupadd --gid 1001 pskr && \
+    useradd  --uid 1001 --gid pskr --no-create-home --shell /sbin/nologin pskr
 
 # ── Directories ───────────────────────────────────────────────────────────────
 # /data        — SQLite database (mount a named volume here)
 # /etc/pskr    — config.yaml (mount or COPY at deploy time)
-RUN mkdir -p /data /etc/pskr \
- && chown pskr:pskr /data /etc/pskr
-
-# Default config — override by mounting /etc/pskr/config.yaml
-COPY config.yaml.example /etc/pskr/config.yaml
-RUN chown pskr:pskr /etc/pskr/config.yaml
+RUN mkdir -p /data /etc/pskr && \
+    chown pskr:pskr /data /etc/pskr /etc/pskr/config.yaml && \
+    echo $GIT_VERSION > /app/git.version
 
 # ── Hardening ─────────────────────────────────────────────────────────────────
 # Drop all capabilities — this service needs none
