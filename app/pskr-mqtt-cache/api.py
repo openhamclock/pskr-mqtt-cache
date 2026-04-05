@@ -121,7 +121,7 @@ def get_spots(
     )
 
     lines = [
-        f"{r['t']},{r['s_grid']},{r['s_call']},{r['r_grid']},{r['r_call']},{r['mode']},{r['freq']},{r['snr']}"
+        f"{r['t']},{r['s_grid']},{r['s_call'][:10]},{r['r_grid']},{r['r_call'][:10]},{r['mode']},{r['freq']},{r['snr']}"
         for r in rows
     ]
     return PlainTextResponse("\n".join(lines) + "\n" if lines else "")
