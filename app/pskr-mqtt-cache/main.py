@@ -1,6 +1,10 @@
 """
 main.py — Entry point for pskr-mqtt-cache.
 
+Copyright (C) 2026 Open HamClock Backend (OHB) Contributors
+License: GNU Affero General Public License v3.0 (AGPLv3)
+See LICENSE file or <https://www.gnu.org/licenses/agpl-3.0.html>
+
 Starts three concurrent components:
   1. MQTT subscriber thread — receives spots and writes to SQLite
   2. Background pruner thread — removes spots older than max_age_hours
