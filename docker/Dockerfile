@@ -1,3 +1,22 @@
+# pskr-mqtt-cache Dockerfile
+#
+# Copyright (C) 2026 Open HamClock Backend (OHB) Contributors
+# License: GNU Affero General Public License v3.0 (AGPLv3)
+# See LICENSE or <https://www.gnu.org/licenses/agpl-3.0.html>
+#
+# Builds a self-contained pskr service compatible with HamClock's
+# fetchPSKReporter wire protocol. 
+#
+# Build:
+#   docker build -t pskr-mqtt-cache .
+#
+# Run:
+#   docker run -p 5000:5000 pskr-mqtt-cache
+#
+# Test:
+#   curl 'http://localhost:5000/spots?ofgrid=CM87'
+#   curl 'http://localhost:5000/status'
+
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
 # Install dependencies in a separate stage so build tools don't end up
 # in the final image.

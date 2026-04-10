@@ -1,6 +1,10 @@
 """
 database.py — SQLite database layer for pskr-mqtt-cache.
 
+Copyright (C) 2026 Open HamClock Backend (OHB) Contributors
+License: GNU Affero General Public License v3.0 (AGPLv3)
+See LICENSE file or <https://www.gnu.org/licenses/agpl-3.0.html>
+
 Schema mirrors the PSKReporter receptionReport fields needed by HamClock.
 WAL mode allows concurrent reads from the FastAPI layer while the MQTT
 subscriber is continuously writing.
