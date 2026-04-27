@@ -46,6 +46,8 @@ class SpotSubscriber:
         self._batch       = []
         self._batch_lock  = threading.Lock()
         self._flush_thread = None
+        self._stop_event  = threading.Event()
+        self._client      = None
 
         # Stats
         self.spots_received  = 0
@@ -119,7 +121,8 @@ class SpotSubscriber:
         log.info("Flush thread started (interval=%ds, max_batch=%d)",
                  FLUSH_INTERVAL, FLUSH_SIZE)
         while self._running:
-            time.sleep(FLUSH_INTERVAL)
+            if self._stop_event.wait(FLUSH_INTERVAL):
+                break
             if self._running:
                 self._flush()
         # Final flush on shutdown
@@ -143,6 +146,7 @@ class SpotSubscriber:
             if self.cfg.tls:
                 client.tls_set()
 
+            self._client = client
             try:
                 log.info("Connecting to %s:%d …", self.cfg.host, self.cfg.port)
                 client.connect(self.cfg.host, self.cfg.port, self.cfg.keepalive)
@@ -152,7 +156,8 @@ class SpotSubscriber:
 
             if self._running:
                 log.info("Reconnecting in %ds …", self.cfg.reconnect_delay)
-                time.sleep(self.cfg.reconnect_delay)
+                if self._stop_event.wait(self.cfg.reconnect_delay):
+                    break
 
         log.info("Subscriber stopped.")
 
@@ -173,6 +178,12 @@ class SpotSubscriber:
     def stop(self):
         """Signal threads to stop."""
         self._running = False
+        self._stop_event.set()
+        if self._client:
+            try:
+                self._client.disconnect()
+            except Exception:
+                pass
         log.info("MQTT subscriber stopping …")
 
     @property

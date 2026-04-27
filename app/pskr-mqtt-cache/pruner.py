@@ -22,6 +22,7 @@ class Pruner:
         self.db       = db
         self.interval = cfg.prune_interval_minutes * 60
         self._running = False
+        self._stop_event = threading.Event()
         self._thread  = None
 
     def _run(self):
@@ -30,7 +31,8 @@ class Pruner:
         self.db.prune()
         self.db.incremental_vacuum()
         while self._running:
-            time.sleep(self.interval)
+            if self._stop_event.wait(self.interval):
+                break
             if self._running:
                 self.db.prune()
                 self.db.incremental_vacuum()
@@ -42,3 +44,4 @@ class Pruner:
 
     def stop(self):
         self._running = False
+        self._stop_event.set()

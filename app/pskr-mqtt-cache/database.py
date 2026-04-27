@@ -251,7 +251,7 @@ class SpotDatabase:
 
     def query_spots(self, bygrid: str = "", ofgrid: str = "",
                     bycall: str = "", ofcall: str = "",
-                    maxage: int = 900) -> list[tuple]:
+                    maxage: int = 900) -> list[sqlite3.Row]:
         """
         Query spots by grid prefix, callsign, and maxage.
 
@@ -316,7 +316,7 @@ class SpotDatabase:
                     # free pages. But we know it's just going to create more
                     # so let's just vacuum half.
                     if pages == 0:
-                        some_pages = before/2 # less aggressively clean
+                        some_pages = before // 2 # less aggressively clean
                         vacuum_sql = f"PRAGMA incremental_vacuum({some_pages})"
                     else:
                         vacuum_sql = f"PRAGMA incremental_vacuum({pages})"
