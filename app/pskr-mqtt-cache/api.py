@@ -40,6 +40,10 @@ _db: SpotDatabase | None = None
 _cfg: APIConfig | None   = None
 _subscriber              = None   # SpotSubscriber — imported lazily to avoid circular
 
+# Cache for expensive DB stats
+_cached_db_stats = {"total": 0, "oldest": None, "newest": None, "timestamp": 0}
+_CACHE_TTL_SEC   = 5 # Cache for 5 seconds
+
 GRID_RE = re.compile(r'^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$')
 
 app = FastAPI(
@@ -142,8 +146,15 @@ def get_status(
     db: SpotDatabase = Depends(get_db),
     _auth            = Depends(check_api_key),
 ):
-    total          = db.count()
-    oldest, newest = db.oldest_newest()
+    global _cached_db_stats
+
+    # Use cached stats if recent enough
+    if (time.time() - _cached_db_stats["timestamp"]) > _CACHE_TTL_SEC:
+        _cached_db_stats["total"]   = db.count()
+        _cached_db_stats["oldest"], _cached_db_stats["newest"] = db.oldest_newest()
+        _cached_db_stats["timestamp"] = time.time()
+
+    total, oldest, newest = _cached_db_stats["total"], _cached_db_stats["oldest"], _cached_db_stats["newest"]
 
     status = {
         "status":       "ok",

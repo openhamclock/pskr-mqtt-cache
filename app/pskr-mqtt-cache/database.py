@@ -248,10 +248,10 @@ class SpotDatabase:
                     # incremental_vacuum can reclaim the space. It does not block readers.
                     # We'll use NORMAL to be less aggressive but still make some happen
                     res = db.execute("PRAGMA wal_checkpoint(NORMAL)").fetchone()
-                    if res and res[2] > 0:
+                    if res and res[2] > 0: # res[2] is the number of pages checkpointed
                         log.info("Checkpointed %d pages from WAL to main database.", res[2])
                     else:
-                        log.info("WAL checkpoint ran, but no pages were moved (busy=%s, log=%s, checkpointed=%s).", res[0], res[1], res[2])
+                        log.info("WAL checkpoint ran, but no pages were moved (busy=%s, log=%s, checkpointed=%s).", res[0], res[1], res[2]) # res[0]=busy, res[1]=log, res[2]=checkpointed
             return total
         except Exception as exc:
             log.error("Prune error: %s", exc)
