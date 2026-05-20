@@ -1,28 +1,22 @@
 """
 main.py — Entry point for pskr-mqtt-cache.
-
 Copyright (C) 2026 Open HamClock Backend (OHB) Contributors
 License: GNU Affero General Public License v3.0 (AGPLv3)
 See LICENSE file or <https://www.gnu.org/licenses/agpl-3.0.html>
-
 Starts three concurrent components:
   1. MQTT subscriber thread — receives spots and writes to SQLite
   2. Background pruner thread — removes spots older than max_age_hours
   3. FastAPI/uvicorn HTTP server — serves /spots and /status queries
-
 Usage:
     python -m pskr_mqtt_cache [--config /path/to/config.yaml]
     # or
     python main.py [--config /path/to/config.yaml]
 """
-
 import sys
 import signal
 import logging
 import argparse
-
 import uvicorn
-
 from .config import load as load_config
 from .database import SpotDatabase
 from .subscriber import SpotSubscriber
@@ -45,7 +39,6 @@ def main():
 
     cfg = load_config(args.config)
     setup_logging(cfg.logging.level)
-
     log = logging.getLogger("pskr_mqtt_cache.main")
     log.info("Starting pskr-mqtt-cache")
 
@@ -62,7 +55,9 @@ def main():
     subscriber.start()
 
     # ── Pruner ────────────────────────────────────────────────────────────────
-    pruner = Pruner(db, cfg.database)
+    # Pass subscriber so pruner can coordinate flush pausing to avoid
+    # write lock starvation on busy systems.
+    pruner = Pruner(db, cfg.database, subscriber)
     pruner.start()
 
     # ── Graceful shutdown ─────────────────────────────────────────────────────

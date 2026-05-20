@@ -48,6 +48,10 @@ class SpotSubscriber:
         self._flush_lock  = threading.Lock()
         self._flush_thread = None
         self._stop_event  = threading.Event()
+
+        # Pruner coordination — set by Pruner to pause flush during prune
+        self._paused_for_prune = threading.Event()
+
         self._client      = None
 
         # Stats
@@ -96,8 +100,9 @@ class SpotSubscriber:
             batch_size = len(self._batch)
 
         # Flush early if batch is large enough
-        if batch_size >= FLUSH_SIZE:
+        if batch_size >= FLUSH_SIZE and not self._paused_for_prune.is_set():
             self._flush()
+
 
         # Periodic stats log
         if self.spots_received % 10000 == 0:
@@ -127,11 +132,25 @@ class SpotSubscriber:
         while self._running:
             if self._stop_event.wait(FLUSH_INTERVAL):
                 break
-            if self._running:
+            # Skip flush if pruner has requested a pause so it can acquire
+            # the SQLite write lock without being starved by our BEGIN IMMEDIATE.
+            if self._running and not self._paused_for_prune.is_set():
                 self._flush()
         # Final flush on shutdown
         self._flush()
         log.info("Flush thread stopped.")
+
+    # ── Pruner Coordination ───────────────────────────────────────────────────
+
+    def pause_for_prune(self):
+        """Signal flush thread to pause while pruner acquires write lock."""
+        self._paused_for_prune.set()
+        log.info("Flush thread paused for pruner.")
+
+    def resume_after_prune(self):
+        """Resume flush thread after pruner completes."""
+        self._paused_for_prune.clear()
+        log.info("Flush thread resumed after pruner.")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
