@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 FLUSH_INTERVAL = 15    # seconds between batch flushes
 FLUSH_SIZE     = 5000  # flush early if batch reaches this size
+MAX_PAUSE_SECONDS = 30 # Maximum time to pause flush (seconds)
 
 
 class SpotSubscriber:
@@ -51,6 +52,7 @@ class SpotSubscriber:
 
         # Pruner coordination — set by Pruner to pause flush during prune
         self._paused_for_prune = threading.Event()
+        self._pause_start = None
 
         self._client      = None
 
@@ -126,30 +128,34 @@ class SpotSubscriber:
             self.spots_inserted += inserted
 
     def _flush_loop(self):
-        """Background thread that flushes the batch every FLUSH_INTERVAL seconds."""
-        log.info("Flush thread started (interval=%ds, max_batch=%d)",
-                 FLUSH_INTERVAL, FLUSH_SIZE)
         while self._running:
             if self._stop_event.wait(FLUSH_INTERVAL):
                 break
-            # Skip flush if pruner has requested a pause so it can acquire
-            # the SQLite write lock without being starved by our BEGIN IMMEDIATE.
-            if self._running and not self._paused_for_prune.is_set():
-                self._flush()
-        # Final flush on shutdown
-        self._flush()
-        log.info("Flush thread stopped.")
+            if self._running:
+                # Auto-resume if pruner has been holding pause too long
+                if self._paused_for_prune.is_set():
+                    pause_duration = time.time() - (self._pause_start or time.time())
+                    if pause_duration > MAX_PAUSE_SECONDS:
+                        log.warning("Pruner pause timeout (%ds) — forcing flush resume",
+                                    int(pause_duration))
+                        self._paused_for_prune.clear()
+                        self._pause_start = None
+                if not self._paused_for_prune.is_set():
+                    self._flush()  
+        
 
     # ── Pruner Coordination ───────────────────────────────────────────────────
 
     def pause_for_prune(self):
         """Signal flush thread to pause while pruner acquires write lock."""
         self._paused_for_prune.set()
+        self._pause_start = time.time()    # record when pause started
         log.info("Flush thread paused for pruner.")
 
     def resume_after_prune(self):
         """Resume flush thread after pruner completes."""
         self._paused_for_prune.clear()
+        self._pause_start = None           # clear the timer
         log.info("Flush thread resumed after pruner.")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
