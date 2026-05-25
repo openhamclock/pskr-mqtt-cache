@@ -42,7 +42,7 @@ class Pruner:
                         paused = True
                         time.sleep(0.5)
                     self.db.prune()
-                    self.db.incremental_vacuum()
+                    #self.db.incremental_vacuum()
                 except Exception as exc:
                     log.error("Pruner error: %s", exc)
                 finally:

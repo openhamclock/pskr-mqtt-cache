@@ -19,6 +19,8 @@ from contextlib import contextmanager
 
 from .config import DatabaseConfig
 
+INSERT_LOCK_TIMEOUT = 10.0  # seconds 
+
 log = logging.getLogger(__name__)
 
 
@@ -88,6 +90,10 @@ class SpotDatabase:
             raise
 
     def _init_schema(self, db: sqlite3.Connection):
+        # Check if this is a fresh database before creating anything
+        is_new = db.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='spots'"
+        ).fetchone()[0] == 0
         db.execute("""
             CREATE TABLE IF NOT EXISTS spots (
                 sq      INTEGER,                -- PSKReporter sequence number (may be absent)
@@ -114,11 +120,21 @@ class SpotDatabase:
         db.execute("CREATE INDEX IF NOT EXISTS idx_t ON spots(t)")
         db.commit()
 
-        # Enable incremental auto_vacuum so freed pages can be reclaimed
-        # without a full VACUUM. Doesn't seem to take before table creation
-        # but with a manual VACUUM it will take.
-        db.execute("PRAGMA auto_vacuum = INCREMENTAL")
-        db.execute("VACUUM")
+        # auto_vacuum must be set after table creation per SQLite docs.
+        # Read current setting:
+        #   0 = NONE, 1 = FULL, 2 = INCREMENTAL
+        current_av = db.execute("PRAGMA auto_vacuum").fetchone()[0]
+        if current_av != 1:  # not already FULL
+            db.execute("PRAGMA auto_vacuum = FULL")
+            db.execute("VACUUM")  # required to activate change on existing db
+            log.info("auto_vacuum changed from %s to FULL — VACUUM complete.",
+                    {0: 'NONE', 2: 'INCREMENTAL'}.get(current_av, current_av))
+        elif is_new:
+            db.execute("PRAGMA auto_vacuum = FULL")
+            db.execute("VACUUM")  # safe on empty db
+            log.info("New database — auto_vacuum=FULL activated.")
+        else:
+            log.info("auto_vacuum=FULL already set — no VACUUM needed.")
         db.commit()
 
     def insert_spot(self, spot: dict) -> bool:
@@ -146,7 +162,8 @@ class SpotDatabase:
             rc   = (spot.get("rc") or "").strip().upper()
 
             with self._conn() as db:
-                db.execute("BEGIN IMMEDIATE")
+                # No BEGIN IMMEDIATE — deferred transaction waits up to
+                # timeout=30s for write lock instead of failing immediately
                 cur = db.execute("""
                     INSERT OR IGNORE INTO spots
                         (sq, t, s_grid, s_call, r_grid, r_call, mode, freq, snr)
@@ -207,8 +224,14 @@ class SpotDatabase:
                 continue
 
         try:
-            with self._conn() as db:
-                db.execute("BEGIN IMMEDIATE")
+            # Dedicated short-timeout connection — independent of the thread-local
+            # pool so it does not affect the pruner's 30s timeout.
+            # WAL mode allows concurrent reads; only writes contend.
+            db = sqlite3.connect(self.path, timeout=INSERT_LOCK_TIMEOUT,
+                                check_same_thread=False)
+            try:
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA synchronous=NORMAL")
                 cur = db.executemany("""
                     INSERT OR IGNORE INTO spots
                         (sq, t, s_grid, s_call, r_grid, r_call, mode, freq, snr)
@@ -216,9 +239,14 @@ class SpotDatabase:
                 """, rows)
                 db.commit()
                 return cur.rowcount
+            finally:
+                db.close()
         except Exception as exc:
             log.error("Batch insert error: %s", exc)
             return 0
+
+
+
 
     def prune(self) -> int:
         """Delete spots older than max_age_sec in batches to avoid long write locks."""
@@ -228,7 +256,7 @@ class SpotDatabase:
         try:
             while True:
                 with self._conn() as db:
-                    db.execute("BEGIN IMMEDIATE")
+                    #db.execute("BEGIN IMMEDIATE")
                     cur = db.execute(
                         "DELETE FROM spots WHERE t < ? ORDER BY t ASC LIMIT ?",
                         (cutoff, batch_size)
@@ -239,7 +267,7 @@ class SpotDatabase:
                     if count < batch_size:
                         break
                 # Brief pause between batches to yield to MQTT writer
-                time.sleep(0.05)
+                time.sleep(0.10)
             if total:
                 log.info("Pruned %d spots older than %dh", total, self.max_age_sec // 3600)
                 # Force a checkpoint to move all that deleted space back to the DB
@@ -302,9 +330,22 @@ class SpotDatabase:
         sql += " ORDER BY t DESC"
 
         try:
-            with self._conn() as db:
+            # Dedicated read connection — short timeout since reads should
+            # never block in WAL mode. If they do, return empty rather than
+            # making HamClock wait for the full 30s pruner timeout.
+            db = sqlite3.connect(self.path, timeout=5,
+                                check_same_thread=False)
+            db.row_factory = sqlite3.Row
+            try:
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA synchronous=NORMAL")
+                db.execute("PRAGMA case_sensitive_like = ON")
+                db.execute("PRAGMA temp_store=MEMORY")
+                db.execute("PRAGMA query_only=ON")
                 cur = db.execute(sql, params)
                 return cur.fetchall()
+            finally:
+                db.close()
         except Exception as exc:
             log.error("Query error: %s", exc)
             return []
