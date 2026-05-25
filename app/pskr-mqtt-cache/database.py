@@ -19,8 +19,6 @@ from contextlib import contextmanager
 
 from .config import DatabaseConfig
 
-INSERT_LOCK_TIMEOUT = 10.0  # seconds 
-
 log = logging.getLogger(__name__)
 
 
@@ -32,6 +30,7 @@ class SpotDatabase:
         self.max_age_sec = cfg.max_age_hours * 3600
         self.prune_interval_sec = cfg.prune_interval_minutes * 60
         self.cache_size_kb = cfg.cache_size_mb * 1024
+        self.insert_lock_timeout = cfg.insert_lock_timeout
 
         # Ensure parent directory exists
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -57,8 +56,8 @@ class SpotDatabase:
         # NORMAL sync is safe with WAL and much faster than FULL
         db.execute("PRAGMA synchronous=NORMAL")
 
-        # CRITICAL: This allows LIKE 'ABC%' to use indexes. 
-        # Since we store data in UPPER case, this makes grid queries 
+        # CRITICAL: This allows LIKE 'ABC%' to use indexes.
+        # Since we store data in UPPER case, this makes grid queries
         # O(log N) instead of O(N).
         db.execute("PRAGMA case_sensitive_like = ON")
 
@@ -94,6 +93,7 @@ class SpotDatabase:
         is_new = db.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='spots'"
         ).fetchone()[0] == 0
+
         db.execute("""
             CREATE TABLE IF NOT EXISTS spots (
                 sq      INTEGER,                -- PSKReporter sequence number (may be absent)
@@ -115,7 +115,7 @@ class SpotDatabase:
         db.execute("CREATE INDEX IF NOT EXISTS idx_s_grid_t ON spots(s_grid, t)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_r_call_t ON spots(r_call, t)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_s_call_t ON spots(s_call, t)")
-        
+
         # Standalone index for the Pruner
         db.execute("CREATE INDEX IF NOT EXISTS idx_t ON spots(t)")
         db.commit()
@@ -188,7 +188,10 @@ class SpotDatabase:
     def insert_batch(self, spots: list[dict]) -> int:
         """
         Bulk insert a list of spot dicts. Returns number of rows inserted.
-        More efficient than individual inserts for batch backfill.
+        Uses a dedicated short-timeout connection so lock contention with the
+        pruner causes a brief wait (up to self.cfg.insert_lock_timeout seconds) rather
+        than an immediate failure. The pruner releases its lock every 100ms
+        between batches so self.cfg.insert_lock_timeout is ample on SSD.
         """
         if not spots:
             return 0
@@ -225,9 +228,9 @@ class SpotDatabase:
 
         try:
             # Dedicated short-timeout connection — independent of the thread-local
-            # pool so it does not affect the pruner's 30s timeout.
+            # pool so it does not affect the pruner's timeout.
             # WAL mode allows concurrent reads; only writes contend.
-            db = sqlite3.connect(self.path, timeout=INSERT_LOCK_TIMEOUT,
+            db = sqlite3.connect(self.path, timeout=self.insert_lock_timeout,
                                 check_same_thread=False)
             try:
                 db.execute("PRAGMA journal_mode=WAL")
@@ -245,18 +248,33 @@ class SpotDatabase:
             log.error("Batch insert error: %s", exc)
             return 0
 
+    def prune(self, abort_check=None) -> int:
+        """Delete spots older than max_age_sec in batches to avoid long write locks.
 
-
-
-    def prune(self) -> int:
-        """Delete spots older than max_age_sec in batches to avoid long write locks."""
+        abort_check: optional callable — if it returns True the prune loop stops
+                     early and releases the write lock. Remaining old spots are
+                     cleaned up on the next scheduled prune cycle. This prevents
+                     the pruner from holding the lock indefinitely after the flush
+                     thread timeout has fired and inserts need to resume.
+        """
         cutoff = int(time.time()) - self.max_age_sec
         total = 0
         batch_size = 10000
         try:
             while True:
+                # Check abort before acquiring the write lock for the next batch.
+                # abort_check returns True when the flush thread timeout fired —
+                # the pruner yields so inserts can proceed; remaining spots are
+                # cleaned up on the next 10-minute prune cycle.
+                if abort_check and abort_check():
+                    log.info("Prune aborted after %d spots — will resume next cycle.",
+                             total)
+                    break
+
                 with self._conn() as db:
-                    #db.execute("BEGIN IMMEDIATE")
+                    # No BEGIN IMMEDIATE — deferred transaction waits up to
+                    # timeout=30s for write lock. Pruner already has priority
+                    # via the cooperative pause in subscriber.py.
                     cur = db.execute(
                         "DELETE FROM spots WHERE t < ? ORDER BY t ASC LIMIT ?",
                         (cutoff, batch_size)
@@ -266,23 +284,20 @@ class SpotDatabase:
                     total += count
                     if count < batch_size:
                         break
-                # Brief pause between batches to yield to MQTT writer
+
+                # Brief pause between batches to yield write lock to MQTT writer
                 time.sleep(0.10)
+
             if total:
                 log.info("Pruned %d spots older than %dh", total, self.max_age_sec // 3600)
-                # Force a checkpoint to move all that deleted space back to the DB
                 with self._conn() as db:
-                    # Use FULL checkpoint mode. PASSIVE is a no-op if another connection
-                    # is writing, which is likely. FULL waits for writers to finish,
-                    # ensuring the checkpoint runs. This is critical for moving deleted
-                    # pages from the WAL to the main DB freelist so that
-                    # incremental_vacuum can reclaim the space. It does not block readers.
-                    # We'll use NORMAL to be less aggressive but still make some happen
                     res = db.execute("PRAGMA wal_checkpoint(NORMAL)").fetchone()
-                    if res and res[2] > 0: # res[2] is the number of pages checkpointed
+                    if res and res[2] > 0:
                         log.info("Checkpointed %d pages from WAL to main database.", res[2])
                     else:
-                        log.info("WAL checkpoint ran, but no pages were moved (busy=%s, log=%s, checkpointed=%s).", res[0], res[1], res[2]) # res[0]=busy, res[1]=log, res[2]=checkpointed
+                        log.info("WAL checkpoint ran, but no pages were moved "
+                                 "(busy=%s, log=%s, checkpointed=%s).",
+                                 res[0], res[1], res[2])
             return total
         except Exception as exc:
             log.error("Prune error: %s", exc)

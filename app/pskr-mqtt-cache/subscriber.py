@@ -31,7 +31,6 @@ log = logging.getLogger(__name__)
 
 FLUSH_INTERVAL = 15    # seconds between batch flushes
 FLUSH_SIZE     = 5000  # flush early if batch reaches this size
-MAX_PAUSE_SECONDS = 30 # Maximum time to pause flush (seconds)
 
 
 class SpotSubscriber:
@@ -135,8 +134,8 @@ class SpotSubscriber:
                 # Auto-resume if pruner has been holding pause too long
                 if self._paused_for_prune.is_set():
                     pause_duration = time.time() - (self._pause_start or time.time())
-                    if pause_duration > MAX_PAUSE_SECONDS:
-                        log.warning("Pruner pause timeout (%ds) — forcing flush resume",
+                    if pause_duration > self.cfg.flush_max_pause:
+                        log.info("Pruner pause timeout (%ds) — forcing flush resume",
                                     int(pause_duration))
                         self._paused_for_prune.clear()
                         self._pause_start = None

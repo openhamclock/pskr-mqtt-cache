@@ -26,6 +26,7 @@ class MQTTConfig:
     client_id: str = "pskr-mqtt-cache"
     keepalive: int = 60
     reconnect_delay: int = 5
+    flush_max_pause: int = 60
 
 
 @dataclass
@@ -34,7 +35,7 @@ class DatabaseConfig:
     max_age_hours: int = 7
     prune_interval_minutes: int = 15
     cache_size_mb: int = 64
-
+    insert_lock_timeout: int = 10
 
 @dataclass
 class APIConfig:

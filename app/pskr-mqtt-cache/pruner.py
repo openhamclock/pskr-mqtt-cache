@@ -7,6 +7,11 @@ See LICENSE file or <https://www.gnu.org/licenses/agpl-3.0.html>
 
 Coordinates with SpotSubscriber to pause the flush thread during pruning
 so the pruner can acquire the SQLite write lock without being starved.
+
+When the flush thread timeout fires (MAX_PAUSE_SECONDS exceeded), the pruner
+detects this via abort_check() and stops batching immediately, releasing the
+write lock so inserts can resume. Remaining old spots are cleaned up on the
+next scheduled prune cycle.
 """
 
 import time
@@ -28,6 +33,16 @@ class Pruner:
         self._stop_event = threading.Event()
         self._thread    = None
 
+    def _abort_prune(self) -> bool:
+        """Return True if the pruner should stop batching.
+
+        Fires when the flush thread timeout has cleared _paused_for_prune —
+        meaning inserts need to resume and the pruner should release the
+        write lock. Remaining old spots are cleaned on the next cycle.
+        """
+        return (self.subscriber is not None and
+                not self.subscriber._paused_for_prune.is_set())
+
     def _run(self):
         log.info("Pruner started (interval=%ds)", self.interval)
         first_run = True
@@ -36,16 +51,24 @@ class Pruner:
                 paused = False
                 try:
                     # Skip pause on startup — flush thread has no backlog yet
-                    # and pausing risks OOM if startup prune takes a long time
+                    # and pausing risks OOM if startup prune takes a long time.
+                    # abort_check is also skipped on first_run since the pause
+                    # flag is not set — no timeout can fire.
                     if self.subscriber and not first_run:
                         self.subscriber.pause_for_prune()
                         paused = True
-                        time.sleep(0.5)
-                    self.db.prune()
-                    #self.db.incremental_vacuum()
+                        time.sleep(0.5)   # let any in-flight flush commit finish
+
+                    # Pass abort_check only for scheduled prune cycles (not startup).
+                    # On startup the flush thread is not paused so abort_check
+                    # would immediately abort — not what we want.
+                    abort = self._abort_prune if (self.subscriber and not first_run) else None
+                    self.db.prune(abort_check=abort)
+
                 except Exception as exc:
                     log.error("Pruner error: %s", exc)
                 finally:
+                    # Always resume flush thread even if prune raised an exception
                     if paused and self.subscriber:
                         try:
                             self.subscriber.resume_after_prune()

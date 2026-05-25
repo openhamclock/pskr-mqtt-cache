@@ -13,14 +13,16 @@ mqtt:
   client_id: "pskr-mqtt-cache"
   keepalive: 60
   reconnect_delay: 5   # seconds between reconnect attempts
+  flush_max_pause: 60  # seconds maximum time to pause flushing for pruner
 
 database:
   path: /data/spots.db
   max_age_hours: 7
-  prune_interval_minutes: 10
+  prune_interval_minutes: 5
   # WAL mode is always enabled for concurrent read/write performance
   cache_size_mb: 64
-
+  insert_lock_timeout: 10    # seconds to wait for db lock for insert_batch
+  
 api:
   host: 0.0.0.0
   port: 5000
