@@ -14,6 +14,10 @@ Usage:
 """
 import sys
 import signal
+# Ensure zombie processes are reaped automatically.
+# Uvicorn uses os.fork() internally and without this handler
+# child processes accumulate as zombies.
+signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 import logging
 import argparse
 import uvicorn
