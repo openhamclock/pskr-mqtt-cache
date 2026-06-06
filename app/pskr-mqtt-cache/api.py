@@ -13,7 +13,7 @@ Endpoints:
       ofgrid  — receiver Maidenhead grid prefix
       maxage  — seconds back from now (default 900, max 86400)
     Returns: plain text CSV, one spot per line, same format as HamClock expects:
-      flowStartSeconds,receiverLocator,receiverCallsign,senderLocator,senderCallsign,mode,frequency,sNR
+      flowStartSeconds,senderLocator,senderCallsign,receiverLocator,receiverCallsign,mode,frequency,sNR
 
   GET /status
     Returns JSON with service health, DB stats, and MQTT connection state.
@@ -86,11 +86,12 @@ def valid_call(c: str) -> bool:
     description="""
 Returns spots in HamClock wire format (CSV, one spot per line):
 
-    flowStartSeconds,receiverLocator,receiverCallsign,senderLocator,senderCallsign,mode,frequency,sNR
+    flowStartSeconds,senderLocator,senderCallsign,receiverLocator,receiverCallsign,mode,frequency,sNR
 
 At least one of `bygrid`, `ofgrid`, `bycall`, or `ofcall` must be provided.
     """,
 )
+@app.get("/ham/HamClock/fetchPSKReporter.pl", response_class=PlainTextResponse, include_in_schema=False)
 def get_spots(
     request: Request,
     bygrid: Optional[str] = Query(default=None, description="Sender grid prefix (e.g. EL97 or EL97ab)"),
@@ -120,6 +121,7 @@ def get_spots(
         if not valid_call(ofcall):
             raise HTTPException(status_code=400, detail=f"Invalid ofcall: {ofcall}")
 
+    # Mapping: based on fetchPSKReporter.pl, 'by' is sender, 'of' is receiver.
     rows = db.query_spots(
         bygrid=bygrid or "",
         ofgrid=ofgrid or "",
