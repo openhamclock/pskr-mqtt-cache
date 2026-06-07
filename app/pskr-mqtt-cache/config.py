@@ -89,6 +89,7 @@ def load(path: str | None = None) -> Config:
             client_id=m.get("client_id", cfg.mqtt.client_id),
             keepalive=int(m.get("keepalive", cfg.mqtt.keepalive)),
             reconnect_delay=int(m.get("reconnect_delay", cfg.mqtt.reconnect_delay)),
+            flush_max_pause=int(m.get("flush_max_pause", cfg.mqtt.flush_max_pau)),
         )
 
     if "database" in raw:
@@ -98,6 +99,7 @@ def load(path: str | None = None) -> Config:
             max_age_hours=int(d.get("max_age_hours", cfg.database.max_age_hours)),
             prune_interval_minutes=int(d.get("prune_interval_minutes", cfg.database.prune_interval_minutes)),
             cache_size_mb=int(d.get("cache_size_mb", cfg.database.cache_size_mb)),
+            insert_lock_timeout=int(d.get("insert_lock_timeout", cfg.database.insert_lock_timeout)),
         )
 
     if "api" in raw:
