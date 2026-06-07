@@ -89,7 +89,7 @@ def load(path: str | None = None) -> Config:
             client_id=m.get("client_id", cfg.mqtt.client_id),
             keepalive=int(m.get("keepalive", cfg.mqtt.keepalive)),
             reconnect_delay=int(m.get("reconnect_delay", cfg.mqtt.reconnect_delay)),
-            flush_max_pause=int(m.get("flush_max_pause", cfg.mqtt.flush_max_pau)),
+            flush_max_pause=int(m.get("flush_max_pause", cfg.mqtt.flush_max_pause)),
         )
 
     if "database" in raw:
