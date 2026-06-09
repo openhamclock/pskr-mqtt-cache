@@ -27,6 +27,8 @@ class MQTTConfig:
     keepalive: int = 60
     reconnect_delay: int = 5
     flush_max_pause: int = 60
+    filter_grid: str = ".{4,}"  #grids are minimum 4 characters
+    filter_call: str = ".{3,}"  #calls are minimum 3 characters
 
 
 @dataclass
@@ -90,6 +92,8 @@ def load(path: str | None = None) -> Config:
             keepalive=int(m.get("keepalive", cfg.mqtt.keepalive)),
             reconnect_delay=int(m.get("reconnect_delay", cfg.mqtt.reconnect_delay)),
             flush_max_pause=int(m.get("flush_max_pause", cfg.mqtt.flush_max_pause)),
+            filter_grid=str(m.get("filter_grid", cfg.mqtt.filter_grid)),
+            filter_call=str(m.get("filter_call", cfg.mqtt.filter_call)),            
         )
 
     if "database" in raw:

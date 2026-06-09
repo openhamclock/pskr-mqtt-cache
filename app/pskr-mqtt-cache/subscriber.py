@@ -26,6 +26,7 @@ import paho.mqtt.client as mqtt
 
 from .config import MQTTConfig
 from .database import SpotDatabase
+import re
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +61,12 @@ class SpotSubscriber:
         self.spots_inserted  = 0
         self.last_spot_time  = None
         self.connect_time    = None
+        
+        # filters
+        self.spots_filtered = 0
+        self._grid_re = re.compile(self.cfg.filter_grid, re.IGNORECASE)
+        self._call_re = re.compile(self.cfg.filter_call, re.IGNORECASE)
+        log.info("subscriber init: grid_filter='%s' call_filter='%s'",self.cfg.filter_grid, self.cfg.filter_call)        
 
     # ── MQTT Callbacks ────────────────────────────────────────────────────────
 
@@ -94,7 +101,24 @@ class SpotSubscriber:
         # Skip spots missing both grids — HamClock requires at least one
         if not spot.get("sl") and not spot.get("rl"):
             return
-
+            
+        # Apply grid and call filters — spot passes if ANY of the four fields match
+        sl = spot.get("sl") or ""
+        rl = spot.get("rl") or ""
+        sc = spot.get("sc") or ""
+        rc = spot.get("rc") or ""
+        
+        if not (self._grid_re.search(sl) or
+                self._grid_re.search(rl) or
+                self._call_re.search(sc) or
+                self._call_re.search(rc)):
+            self.spots_filtered += 1    
+            if self.spots_filtered % 10000 == 0:
+                log.info("Stats filtered: received=%d, filtered=%d",
+                         self.spots_received, self.spots_filtered)
+            return        
+        
+        
         # Append to batch — lock is brief (list append is O(1))
         with self._batch_lock:
             self._batch.append(spot)
@@ -107,8 +131,8 @@ class SpotSubscriber:
 
         # Periodic stats log
         if self.spots_received % 10000 == 0:
-            log.info("Stats: received=%d inserted=%d",
-                     self.spots_received, self.spots_inserted)
+            log.info("Stats: received=%d filtered=%d inserted=%d",
+                     self.spots_received, self.spots_filtered, self.spots_inserted)
 
     # ── Batch Flush ───────────────────────────────────────────────────────────
 
@@ -141,7 +165,8 @@ class SpotSubscriber:
                         self._pause_start = None
                 if not self._paused_for_prune.is_set():
                     self._flush()  
-        
+                    log.info("Flushing stats: received=%d filtered=%d inserted=%d",
+                             self.spots_received, self.spots_filtered, self.spots_inserted)        
 
     # ── Pruner Coordination ───────────────────────────────────────────────────
 
@@ -224,5 +249,6 @@ class SpotSubscriber:
             "connect_time":    self.connect_time,
             "spots_received":  self.spots_received,
             "spots_inserted":  self.spots_inserted,
+            "spots_filtered":  self.spots_filtered,            
             "last_spot_time":  self.last_spot_time,
         }

@@ -14,6 +14,9 @@ mqtt:
   keepalive: 60
   reconnect_delay: 5   # seconds between reconnect attempts
   flush_max_pause: 60  # seconds maximum time to pause flushing for pruner
+# if any of sending or receiving grids or call filter regex below match, spot is added to database. ^ start, $ end
+  filter_grid: ".{3,}"   # default ".{3,}" 3 characters min 
+  filter_call: ".{4,}"   # default ".{4,}" 4 characters min
 
 database:
   path: /data/spots.db
