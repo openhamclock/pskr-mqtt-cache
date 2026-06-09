@@ -25,6 +25,7 @@ database:
   # WAL mode is always enabled for concurrent read/write performance
   cache_size_mb: 64
   insert_lock_timeout: 10    # seconds to wait for db lock for insert_batch
+  mmap_size_mb: 2048
   
 api:
   host: 0.0.0.0

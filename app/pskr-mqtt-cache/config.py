@@ -38,6 +38,7 @@ class DatabaseConfig:
     prune_interval_minutes: int = 15
     cache_size_mb: int = 64
     insert_lock_timeout: int = 10
+    mmap_size_mb: int = 2048
 
 @dataclass
 class APIConfig:
@@ -104,6 +105,7 @@ def load(path: str | None = None) -> Config:
             prune_interval_minutes=int(d.get("prune_interval_minutes", cfg.database.prune_interval_minutes)),
             cache_size_mb=int(d.get("cache_size_mb", cfg.database.cache_size_mb)),
             insert_lock_timeout=int(d.get("insert_lock_timeout", cfg.database.insert_lock_timeout)),
+            mmap_size_mb=int(d.get("mmap_size_mb", cfg.database.mmap_size_mb)),
         )
 
     if "api" in raw:

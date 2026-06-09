@@ -31,6 +31,7 @@ class SpotDatabase:
         self.prune_interval_sec = cfg.prune_interval_minutes * 60
         self.cache_size_kb = cfg.cache_size_mb * 1024
         self.insert_lock_timeout = cfg.insert_lock_timeout
+        self.mmap_size = cfg.mmap_size_mb * 1024 * 1024         
 
         # Ensure parent directory exists
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -72,8 +73,7 @@ class SpotDatabase:
 
         # Use memory-mapped I/O. 2GB is a safe starting point for your Xeon.
         # This significantly reduces CPU cycles spent on I/O.
-        mmap_size = 2 * 1024 * 1024 * 1024
-        db.execute(f"PRAGMA mmap_size={mmap_size}")
+        db.execute(f"PRAGMA mmap_size={self.mmap_size}")
 
         return db
 
