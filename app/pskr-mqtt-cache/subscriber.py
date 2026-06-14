@@ -75,8 +75,14 @@ class SpotSubscriber:
             self._connected   = True
             self.connect_time = time.time()
             log.info("Connected to MQTT broker %s:%d", self.cfg.host, self.cfg.port)
-            client.subscribe(self.cfg.topic)
-            log.info("Subscribed to topic: %s", self.cfg.topic)
+            # Support single topic string or list of topics
+            topics = self.cfg.topic if isinstance(self.cfg.topic, list) else [self.cfg.topic]
+            for topic in topics:
+                try:
+                    client.subscribe(topic)
+                    log.info("Subscribed to topic: %s", topic)
+                except Exception as exc:
+                    log.error("Failed to subscribe to topic %s: %s", topic, exc)
         else:
             log.error("MQTT connect failed, rc=%d", rc)
 

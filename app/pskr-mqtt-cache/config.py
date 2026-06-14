@@ -22,7 +22,7 @@ class MQTTConfig:
     host: str = "mqtt.pskreporter.info"
     port: int = 1883
     tls: bool = False
-    topic: str = "pskr/filter/v2/#"
+    topic: str | list = "pskr/filter/v2/#"
     client_id: str = "pskr-mqtt-cache"
     keepalive: int = 60
     reconnect_delay: int = 5
