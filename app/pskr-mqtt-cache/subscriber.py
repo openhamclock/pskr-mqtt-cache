@@ -45,6 +45,7 @@ class SpotSubscriber:
         # In-memory batch — MQTT callback appends here, flush thread drains it
         self._batch       = []
         self._batch_lock  = threading.Lock()
+        self._flush_lock  = threading.Lock()
         self._flush_thread = None
         self._stop_event  = threading.Event()
         self._client      = None
@@ -107,14 +108,17 @@ class SpotSubscriber:
 
     def _flush(self):
         """Drain the batch and write to SQLite."""
-        with self._batch_lock:
-            if not self._batch:
-                return
-            batch = self._batch
-            self._batch = []
+        # The flush_lock ensures that the timer thread and the buffer-full
+        # logic don't attempt to write to the database simultaneously.
+        with self._flush_lock:
+            with self._batch_lock:
+                if not self._batch:
+                    return
+                batch = self._batch
+                self._batch = []
 
-        inserted = self.db.insert_batch(batch)
-        self.spots_inserted += inserted
+            inserted = self.db.insert_batch(batch)
+            self.spots_inserted += inserted
 
     def _flush_loop(self):
         """Background thread that flushes the batch every FLUSH_INTERVAL seconds."""

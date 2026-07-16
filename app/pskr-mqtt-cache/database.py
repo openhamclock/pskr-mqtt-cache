@@ -146,6 +146,7 @@ class SpotDatabase:
             rc   = (spot.get("rc") or "").strip().upper()
 
             with self._conn() as db:
+                db.execute("BEGIN IMMEDIATE")
                 cur = db.execute("""
                     INSERT OR IGNORE INTO spots
                         (sq, t, s_grid, s_call, r_grid, r_call, mode, freq, snr)
@@ -207,6 +208,7 @@ class SpotDatabase:
 
         try:
             with self._conn() as db:
+                db.execute("BEGIN IMMEDIATE")
                 cur = db.executemany("""
                     INSERT OR IGNORE INTO spots
                         (sq, t, s_grid, s_call, r_grid, r_call, mode, freq, snr)
@@ -226,6 +228,7 @@ class SpotDatabase:
         try:
             while True:
                 with self._conn() as db:
+                    db.execute("BEGIN IMMEDIATE")
                     cur = db.execute(
                         "DELETE FROM spots WHERE t < ? ORDER BY t ASC LIMIT ?",
                         (cutoff, batch_size)
