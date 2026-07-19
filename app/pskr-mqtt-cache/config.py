@@ -34,6 +34,17 @@ class DatabaseConfig:
     max_age_hours: int = 7
     prune_interval_minutes: int = 15
     cache_size_mb: int = 64
+    # incremental_vacuum() is real disk I/O (page shuffling) on top of the
+    # prune's own batched deletes + WAL checkpoint. Running it on every
+    # single prune cycle is what produces the periodic CPU/IRQ sawtooth on
+    # a worldwide-scoped cache. Only vacuum every Nth prune cycle instead —
+    # the freelist just gets reused between vacuums, so this costs nothing
+    # correctness-wise, only delays how quickly disk space is reclaimed.
+    vacuum_every_n_prunes: int = 4
+    # Checkpoint the WAL on this short, independent cadence (seconds) so
+    # it never has 10-15 minutes to accumulate a large backlog between
+    # prune cycles. See checkpointer.py.
+    checkpoint_interval_seconds: int = 60
 
 
 @dataclass
@@ -97,6 +108,8 @@ def load(path: str | None = None) -> Config:
             max_age_hours=int(d.get("max_age_hours", cfg.database.max_age_hours)),
             prune_interval_minutes=int(d.get("prune_interval_minutes", cfg.database.prune_interval_minutes)),
             cache_size_mb=int(d.get("cache_size_mb", cfg.database.cache_size_mb)),
+            vacuum_every_n_prunes=int(d.get("vacuum_every_n_prunes", cfg.database.vacuum_every_n_prunes)),
+            checkpoint_interval_seconds=int(d.get("checkpoint_interval_seconds", cfg.database.checkpoint_interval_seconds)),
         )
 
     if "api" in raw:
