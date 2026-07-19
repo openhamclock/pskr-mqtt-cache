@@ -27,6 +27,7 @@ from .config import load as load_config
 from .database import SpotDatabase
 from .subscriber import SpotSubscriber
 from .pruner import Pruner
+from .checkpointer import Checkpointer
 from . import api
 
 
@@ -65,11 +66,18 @@ def main():
     pruner = Pruner(db, cfg.database)
     pruner.start()
 
+    # ── Checkpointer ──────────────────────────────────────────────────────────
+    # Runs independently of the pruner on a short cadence so the WAL never
+    # gets a chance to build a large backlog between prune cycles.
+    checkpointer = Checkpointer(db, cfg.database)
+    checkpointer.start()
+
     # ── Graceful shutdown ─────────────────────────────────────────────────────
     def shutdown(signum, frame):
         log.info("Shutting down (signal %d) …", signum)
         subscriber.stop()
         pruner.stop()
+        checkpointer.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, shutdown)

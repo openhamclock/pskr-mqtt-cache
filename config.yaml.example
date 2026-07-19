@@ -20,6 +20,16 @@ database:
   prune_interval_minutes: 10
   # WAL mode is always enabled for concurrent read/write performance
   cache_size_mb: 64
+  # incremental_vacuum() is disk-I/O heavy. At worldwide spot volume,
+  # running it on every prune cycle causes a periodic CPU/IRQ spike
+  # every prune_interval_minutes. Only vacuum every Nth prune instead —
+  # raise this if you still see periodic spikes on the host graph.
+  vacuum_every_n_prunes: 4
+  # Checkpoint the WAL on this short, fixed cadence (seconds), separate
+  # from prune_interval_minutes. Without this, WAL can accumulate for
+  # the whole prune interval and then has to be flushed all at once —
+  # this is the main cause of periodic CPU/IRQ spikes at worldwide volume.
+  checkpoint_interval_seconds: 60
 
 api:
   host: 0.0.0.0

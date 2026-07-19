@@ -220,6 +220,28 @@ class SpotDatabase:
             log.error("Batch insert error: %s", exc)
             return 0
 
+    def checkpoint(self) -> int:
+        """
+        Run a PASSIVE WAL checkpoint. Safe to call frequently and from
+        multiple call sites — PASSIVE never blocks the MQTT writer, it
+        just moves whatever WAL frames it currently can.
+
+        Calling this often (e.g. every 60s) instead of only after a
+        15-minute prune cycle keeps the WAL small continuously, instead
+        of letting it accumulate for the full interval and then having
+        to move a large backlog in a single pass.
+        """
+        try:
+            with self._conn() as db:
+                res = db.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                if res and res[2] > 0:  # res[2] is the number of pages checkpointed
+                    log.info("Checkpointed %d pages from WAL to main database.", res[2])
+                    return res[2]
+                return 0
+        except Exception as exc:
+            log.error("Checkpoint error: %s", exc)
+            return 0
+
     def prune(self) -> int:
         """Delete spots older than max_age_sec in batches to avoid long write locks."""
         cutoff = int(time.time()) - self.max_age_sec
@@ -242,19 +264,10 @@ class SpotDatabase:
                 time.sleep(0.05)
             if total:
                 log.info("Pruned %d spots older than %dh", total, self.max_age_sec // 3600)
-                # Force a checkpoint to move all that deleted space back to the DB
-                with self._conn() as db:
-                    # Use FULL checkpoint mode. PASSIVE is a no-op if another connection
-                    # is writing, which is likely. FULL waits for writers to finish,
-                    # ensuring the checkpoint runs. This is critical for moving deleted
-                    # pages from the WAL to the main DB freelist so that
-                    # incremental_vacuum can reclaim the space. It does not block readers.
-                    # We'll use NORMAL to be less aggressive but still make some happen
-                    res = db.execute("PRAGMA wal_checkpoint(NORMAL)").fetchone()
-                    if res and res[2] > 0: # res[2] is the number of pages checkpointed
-                        log.info("Checkpointed %d pages from WAL to main database.", res[2])
-                    else:
-                        log.info("WAL checkpoint ran, but no pages were moved (busy=%s, log=%s, checkpointed=%s).", res[0], res[1], res[2]) # res[0]=busy, res[1]=log, res[2]=checkpointed
+                # This is now just a top-up — the Checkpointer thread already
+                # keeps the WAL small on its own short cadence, so this call
+                # should normally have little left to do.
+                self.checkpoint()
             return total
         except Exception as exc:
             log.error("Prune error: %s", exc)
