@@ -34,6 +34,12 @@ class DatabaseConfig:
     max_age_hours: int = 7
     prune_interval_minutes: int = 15
     cache_size_mb: int = 64
+    # cache_size and mmap_size are PER SQLITE CONNECTION. Total reservation is
+    # (read_pool_size + 1) * each. The old code opened an unbounded number of
+    # connections (one per thread, forever), so a 2GB mmap_size meant VIRT grew
+    # by 2GB for every new API thread. Keep the pool small and mmap modest.
+    read_pool_size: int = 6
+    mmap_size_mb: int = 256
     # incremental_vacuum() is real disk I/O (page shuffling) on top of the
     # prune's own batched deletes + WAL checkpoint. Running it on every
     # single prune cycle is what produces the periodic CPU/IRQ sawtooth on
@@ -52,6 +58,17 @@ class APIConfig:
     host: str = "0.0.0.0"
     port: int = 5000
     api_key: str = ""
+    # Upper bound on Starlette's sync-endpoint thread pool. Left at the
+    # framework default, a burst of concurrent /spots calls spawns threads
+    # without meaningful limit — and each new thread used to open its own
+    # SQLite connection that was never released.
+    thread_pool_limit: int = 16
+    # Seconds to cache a /spots response for an identical query. The MQTT
+    # subscriber only flushes to SQLite every FLUSH_INTERVAL (15s), so a TTL
+    # at or below that costs no freshness at all.
+    spots_cache_ttl_seconds: int = 10
+    # Max distinct query keys held in the /spots cache (LRU eviction).
+    spots_cache_max_entries: int = 2048
 
 
 @dataclass
@@ -108,6 +125,8 @@ def load(path: str | None = None) -> Config:
             max_age_hours=int(d.get("max_age_hours", cfg.database.max_age_hours)),
             prune_interval_minutes=int(d.get("prune_interval_minutes", cfg.database.prune_interval_minutes)),
             cache_size_mb=int(d.get("cache_size_mb", cfg.database.cache_size_mb)),
+            read_pool_size=int(d.get("read_pool_size", cfg.database.read_pool_size)),
+            mmap_size_mb=int(d.get("mmap_size_mb", cfg.database.mmap_size_mb)),
             vacuum_every_n_prunes=int(d.get("vacuum_every_n_prunes", cfg.database.vacuum_every_n_prunes)),
             checkpoint_interval_seconds=int(d.get("checkpoint_interval_seconds", cfg.database.checkpoint_interval_seconds)),
         )
@@ -118,6 +137,9 @@ def load(path: str | None = None) -> Config:
             host=a.get("host", cfg.api.host),
             port=int(a.get("port", cfg.api.port)),
             api_key=str(a.get("api_key", cfg.api.api_key)),
+            thread_pool_limit=int(a.get("thread_pool_limit", cfg.api.thread_pool_limit)),
+            spots_cache_ttl_seconds=int(a.get("spots_cache_ttl_seconds", cfg.api.spots_cache_ttl_seconds)),
+            spots_cache_max_entries=int(a.get("spots_cache_max_entries", cfg.api.spots_cache_max_entries)),
         )
 
     if "logging" in raw:

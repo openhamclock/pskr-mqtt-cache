@@ -25,6 +25,8 @@ Endpoints:
 import re
 import time
 import logging
+import threading
+from collections import OrderedDict
 from typing import Optional
 
 from fastapi import FastAPI, Query, HTTPException, Request, Depends
@@ -43,6 +45,38 @@ _subscriber              = None   # SpotSubscriber — imported lazily to avoid 
 # Cache for expensive DB stats
 _cached_db_stats = {"total": 0, "oldest": None, "newest": None, "timestamp": 0}
 _CACHE_TTL_SEC   = 5 # Cache for 5 seconds
+
+# ── /spots response cache ─────────────────────────────────────────────────────
+# /status was already cached but /spots — the endpoint every HamClock actually
+# polls — was not, so N clients asking the same question each did their own
+# index lookup and row formatting. Individual queries are cheap (~1-2ms); this
+# is about cutting redundant work at high client counts, not about slow SQL.
+# Spot data only changes when the MQTT subscriber flushes (every 15s), so a TTL
+# at or below that costs nothing in freshness.
+_spots_cache: "OrderedDict[tuple, tuple[float, str]]" = OrderedDict()
+_spots_cache_lock = threading.Lock()
+
+
+def _spots_cache_get(key: tuple, ttl: int) -> str | None:
+    now = time.time()
+    with _spots_cache_lock:
+        hit = _spots_cache.get(key)
+        if hit is None:
+            return None
+        ts, body = hit
+        if now - ts > ttl:
+            del _spots_cache[key]
+            return None
+        _spots_cache.move_to_end(key)   # LRU touch
+        return body
+
+
+def _spots_cache_put(key: tuple, body: str, max_entries: int) -> None:
+    with _spots_cache_lock:
+        _spots_cache[key] = (time.time(), body)
+        _spots_cache.move_to_end(key)
+        while len(_spots_cache) > max_entries:
+            _spots_cache.popitem(last=False)
 
 GRID_RE = re.compile(r'^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$')
 
@@ -121,15 +155,35 @@ def get_spots(
         if not valid_call(ofcall):
             raise HTTPException(status_code=400, detail=f"Invalid ofcall: {ofcall}")
 
+    # Normalize before building the cache key so EL97/el97 share one entry.
+    bygrid = (bygrid or "").upper()
+    ofgrid = (ofgrid or "").upper()
+    bycall = bycall or ""
+    ofcall = ofcall or ""
+
+    ttl = _cfg.spots_cache_ttl_seconds if _cfg else 10
+    max_entries = _cfg.spots_cache_max_entries if _cfg else 2048
+
+    # Quantize maxage into TTL-sized buckets. Clients send arbitrary maxage
+    # values; without this, near-identical requests each get their own cache
+    # entry and the hit rate collapses.
+    cache_key = (bygrid, ofgrid, bycall, ofcall,
+                 maxage - (maxage % ttl) if ttl > 0 else maxage)
+
+    if ttl > 0:
+        cached = _spots_cache_get(cache_key, ttl)
+        if cached is not None:
+            return PlainTextResponse(cached)
+
     # Mapping: based on fetchPSKReporter.pl, 'by' is sender, 'of' is receiver.
     rows = db.query_spots(
-        bygrid=bygrid or "",
-        ofgrid=ofgrid or "",
-        bycall=bycall or "",
-        ofcall=ofcall or "",
+        bygrid=bygrid,
+        ofgrid=ofgrid,
+        bycall=bycall,
+        ofcall=ofcall,
         maxage=maxage,
     )
-    
+
     # Optimization: Use positional indexing instead of column names.
     # sqlite3.Row access by name is slow in tight loops.
     # Order: t[0], s_grid[1], s_call[2], r_grid[3], r_call[4], mode[5], freq[6], snr[7]
@@ -137,7 +191,12 @@ def get_spots(
     for r in rows:
         lines.append(f"{r[0]},{r[1]},{r[2][:10]},{r[3]},{r[4][:10]},{r[5]},{r[6]},{r[7]}")
 
-    return PlainTextResponse("\n".join(lines) + "\n" if lines else "")
+    body = "\n".join(lines) + "\n" if lines else ""
+
+    if ttl > 0:
+        _spots_cache_put(cache_key, body, max_entries)
+
+    return PlainTextResponse(body)
 
 
 @app.get(

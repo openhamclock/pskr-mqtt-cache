@@ -1,4 +1,7 @@
 paho-mqtt>=2.0.0
+# subscriber.py imports orjson but it was never declared here — the service
+# only started because orjson happened to be present in the image.
+orjson>=3.9.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
 pyyaml>=6.0

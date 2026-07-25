@@ -21,6 +21,7 @@ import signal
 import logging
 import argparse
 
+import anyio.to_thread
 import uvicorn
 
 from .config import load as load_config
@@ -83,7 +84,30 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
+    # ── Thread pool cap ───────────────────────────────────────────────────────
+    # get_spots() is a sync `def`, so Starlette dispatches every call onto its
+    # anyio worker thread pool. That pool's default ceiling is high, so a burst
+    # of concurrent /spots requests spawns threads without meaningful limit.
+    # Combined with the old thread-local SQLite connections, each new thread
+    # also leaked a connection — and its mmap/cache reservation — permanently.
+    # This is the mechanism behind the observed 10 -> 36 thread and
+    # 23.8g -> 75.8g VIRT growth inside one minute.
+    # Cap the pool so concurrency is bounded and excess requests queue instead.
+    async def _apply_thread_limit():
+        anyio.to_thread.current_default_thread_limiter().total_tokens = \
+            cfg.api.thread_pool_limit
+
+    @api.app.on_event("startup")
+    async def _on_startup():
+        await _apply_thread_limit()
+        log.info("Sync thread pool capped at %d", cfg.api.thread_pool_limit)
+
     # ── HTTP Server (blocks until killed) ─────────────────────────────────────
+    # NOTE: uvicorn is intentionally still single-process here. Raising
+    # workers > 1 would fork the MQTT subscriber and pruner too, producing
+    # duplicate firehose subscriptions and multiple writers against one SQLite
+    # file. Scaling the API horizontally requires splitting ingest into its own
+    # process first — do that before reaching for workers > 1.
     log.info("Starting API on %s:%d", cfg.api.host, cfg.api.port)
     uvicorn.run(
         api.app,
