@@ -8,9 +8,23 @@ See LICENSE file or <https://www.gnu.org/licenses/agpl-3.0.html>
 Schema mirrors the PSKReporter receptionReport fields needed by HamClock.
 WAL mode allows concurrent reads from the FastAPI layer while the MQTT
 subscriber is continuously writing.
+
+Connection model
+----------------
+Reads come from a FIXED-SIZE pool of connections (read_pool_size). Writes all
+go through ONE dedicated connection guarded by a lock.
+
+This replaces the previous thread-local scheme, where every thread that ever
+touched the DB lazily opened its own connection and kept it forever. Because
+the API's sync endpoints run on Starlette's thread pool, connection count grew
+with request concurrency — and each connection carried its own mmap_size and
+cache_size reservation, so thread growth showed up as multi-gigabyte VIRT
+growth and runaway CPU. A bounded pool makes connection count independent of
+load.
 """
 
 import time
+import queue
 import logging
 import sqlite3
 import threading
@@ -30,19 +44,31 @@ class SpotDatabase:
         self.max_age_sec = cfg.max_age_hours * 3600
         self.prune_interval_sec = cfg.prune_interval_minutes * 60
         self.cache_size_kb = cfg.cache_size_mb * 1024
+        self.mmap_size_bytes = cfg.mmap_size_mb * 1024 * 1024
+        self.read_pool_size = max(1, cfg.read_pool_size)
 
         # Ensure parent directory exists
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Thread-local connections — each thread gets its own SQLite connection
-        # This is the correct pattern for SQLite with multiple threads
-        self._local = threading.local()
+        # ── Single dedicated writer ───────────────────────────────────────────
+        # All INSERT/DELETE/checkpoint/vacuum traffic serializes through this
+        # one connection. SQLite only permits one writer at a time anyway, so
+        # a pool of writers would just contend on the same lock.
+        self._write_lock = threading.Lock()
+        self._write_db = self._connect()
 
         # Initialize schema on startup
-        with self._conn() as db:
-            self._init_schema(db)
+        self._init_schema(self._write_db)
 
-        log.info("Database initialized: %s", self.path)
+        # ── Bounded read pool ─────────────────────────────────────────────────
+        # LIFO so hot connections stay hot and idle ones stay cold.
+        self._read_pool: queue.LifoQueue = queue.LifoQueue(maxsize=self.read_pool_size)
+        for _ in range(self.read_pool_size):
+            self._read_pool.put(self._connect())
+
+        log.info("Database initialized: %s (read_pool=%d, mmap=%dMB, cache=%dMB)",
+                 self.path, self.read_pool_size,
+                 self.mmap_size_bytes // (1024 * 1024), self.cache_size_kb // 1024)
 
     def _connect(self) -> sqlite3.Connection:
         """Create a new SQLite connection with optimal settings."""
@@ -55,12 +81,16 @@ class SpotDatabase:
         # NORMAL sync is safe with WAL and much faster than FULL
         db.execute("PRAGMA synchronous=NORMAL")
 
-        # CRITICAL: This allows LIKE 'ABC%' to use indexes. 
-        # Since we store data in UPPER case, this makes grid queries 
+        # CRITICAL: This allows LIKE 'ABC%' to use indexes.
+        # Since we store data in UPPER case, this makes grid queries
         # O(log N) instead of O(N).
         db.execute("PRAGMA case_sensitive_like = ON")
 
         db.execute("PRAGMA temp_store=MEMORY")
+
+        # NOTE: cache_size and mmap_size are PER CONNECTION, not per process.
+        # They are now sized on the assumption that read_pool_size + 1
+        # connections exist simultaneously. Multiply before raising either.
         db.execute(f"PRAGMA cache_size=-{self.cache_size_kb}")
 
         # Allow readers to proceed even during writes
@@ -69,23 +99,37 @@ class SpotDatabase:
         # Force the WAL to truncate to 4MB after a successful checkpoint
         db.execute("PRAGMA journal_size_limit = 4194304")
 
-        # Use memory-mapped I/O. 2GB is a safe starting point for your Xeon.
-        # This significantly reduces CPU cycles spent on I/O.
-        mmap_size = 2 * 1024 * 1024 * 1024
-        db.execute(f"PRAGMA mmap_size={mmap_size}")
+        # Memory-mapped I/O reduces CPU spent on I/O, but each connection
+        # reserves this much address space. Keep it modest now that the pool
+        # is fixed-size; total reservation is (read_pool_size + 1) * mmap_size.
+        db.execute(f"PRAGMA mmap_size={self.mmap_size_bytes}")
 
         return db
 
     @contextmanager
-    def _conn(self):
-        """Thread-local connection context manager."""
-        if not hasattr(self._local, "db") or self._local.db is None:
-            self._local.db = self._connect()
+    def _read_conn(self):
+        """Borrow a connection from the bounded read pool, always return it."""
+        db = self._read_pool.get()
         try:
-            yield self._local.db
+            yield db
         except Exception:
-            self._local.db.rollback()
+            try:
+                db.rollback()
+            except Exception:
+                pass
             raise
+        finally:
+            self._read_pool.put(db)
+
+    @contextmanager
+    def _write_conn(self):
+        """Exclusive access to the single writer connection."""
+        with self._write_lock:
+            try:
+                yield self._write_db
+            except Exception:
+                self._write_db.rollback()
+                raise
 
     def _init_schema(self, db: sqlite3.Connection):
         db.execute("""
@@ -109,7 +153,7 @@ class SpotDatabase:
         db.execute("CREATE INDEX IF NOT EXISTS idx_s_grid_t ON spots(s_grid, t)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_r_call_t ON spots(r_call, t)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_s_call_t ON spots(s_call, t)")
-        
+
         # Standalone index for the Pruner
         db.execute("CREATE INDEX IF NOT EXISTS idx_t ON spots(t)")
         db.commit()
@@ -145,7 +189,7 @@ class SpotDatabase:
             sc   = (spot.get("sc") or "").strip().upper()
             rc   = (spot.get("rc") or "").strip().upper()
 
-            with self._conn() as db:
+            with self._write_conn() as db:
                 db.execute("BEGIN IMMEDIATE")
                 cur = db.execute("""
                     INSERT OR IGNORE INTO spots
@@ -207,7 +251,7 @@ class SpotDatabase:
                 continue
 
         try:
-            with self._conn() as db:
+            with self._write_conn() as db:
                 db.execute("BEGIN IMMEDIATE")
                 cur = db.executemany("""
                     INSERT OR IGNORE INTO spots
@@ -232,7 +276,7 @@ class SpotDatabase:
         to move a large backlog in a single pass.
         """
         try:
-            with self._conn() as db:
+            with self._write_conn() as db:
                 res = db.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
                 if res and res[2] > 0:  # res[2] is the number of pages checkpointed
                     log.info("Checkpointed %d pages from WAL to main database.", res[2])
@@ -249,7 +293,7 @@ class SpotDatabase:
         batch_size = 10000
         try:
             while True:
-                with self._conn() as db:
+                with self._write_conn() as db:
                     db.execute("BEGIN IMMEDIATE")
                     cur = db.execute(
                         "DELETE FROM spots WHERE t < ? ORDER BY t ASC LIMIT ?",
@@ -315,7 +359,7 @@ class SpotDatabase:
         sql += " ORDER BY t DESC"
 
         try:
-            with self._conn() as db:
+            with self._read_conn() as db:
                 cur = db.execute(sql, params)
                 return cur.fetchall()
         except Exception as exc:
@@ -326,7 +370,7 @@ class SpotDatabase:
         """Reclaim up to `pages` freed pages from the database file.
         Called after pruning to gradually shrink the file without downtime."""
         try:
-            with self._conn() as db:
+            with self._write_conn() as db:
                 before = db.execute("PRAGMA freelist_count;").fetchone()[0]
                 if before == 0:
                     return
@@ -364,7 +408,7 @@ class SpotDatabase:
 
     def count(self) -> int:
         try:
-            with self._conn() as db:
+            with self._read_conn() as db:
                 return db.execute("SELECT COUNT(*) FROM spots").fetchone()[0]
         except Exception:
             return 0
@@ -372,7 +416,7 @@ class SpotDatabase:
     def oldest_newest(self) -> tuple[int | None, int | None]:
         """Return (oldest_t, newest_t) for status reporting."""
         try:
-            with self._conn() as db:
+            with self._read_conn() as db:
                 row = db.execute("SELECT MIN(t), MAX(t) FROM spots").fetchone()
                 return (row[0], row[1]) if row else (None, None)
         except Exception:
