@@ -115,6 +115,7 @@ def main():
         port=cfg.api.port,
         log_level=cfg.logging.level.lower(),
         access_log=False,   # Suppress per-request logs — too noisy at scale
+        timeout_keep_alive=65,
     )
 
 

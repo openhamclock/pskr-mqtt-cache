@@ -108,8 +108,13 @@ class SpotDatabase:
 
     @contextmanager
     def _read_conn(self):
-        """Borrow a connection from the bounded read pool, always return it."""
-        db = self._read_pool.get()
+        """Borrow a connection from the bounded read pool with a timeout, always return it."""
+        try:
+            db = self._read_pool.get(timeout=5.0)
+        except queue.Empty:
+            log.error("Read pool connection timeout (5.0s)")
+            raise RuntimeError("Database read pool busy — connection request timed out")
+
         try:
             yield db
         except Exception:
