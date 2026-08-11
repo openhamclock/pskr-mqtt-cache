@@ -38,7 +38,7 @@ class DatabaseConfig:
     # (read_pool_size + 1) * each. The old code opened an unbounded number of
     # connections (one per thread, forever), so a 2GB mmap_size meant VIRT grew
     # by 2GB for every new API thread. Keep the pool small and mmap modest.
-    read_pool_size: int = 6
+    read_pool_size: int = 16
     mmap_size_mb: int = 256
     # incremental_vacuum() is real disk I/O (page shuffling) on top of the
     # prune's own batched deletes + WAL checkpoint. Running it on every
