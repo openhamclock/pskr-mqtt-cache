@@ -10,14 +10,23 @@
 # Variables to set
 IMAGE_BASE=komacke/pskr-mqtt-cache
 
-# Don't set anything past here
-TAG=$(git describe --exact-match --tags 2>/dev/null)
-if [ $? -ne 0 ]; then
-    echo "NOTE: Not currently on a tag. Using 'edge'."
-    TAG=edge
-    GIT_VERSION=$(git rev-parse --short HEAD)
-else
+# Define color variables
+RED=$(tput bold; tput setaf 1 2>/dev/null || true)
+YELLOW=$(tput setaf 3 2>/dev/null || true)
+GREEN=$(tput setaf 2 2>/dev/null || true)
+NC=$(tput sgr0 2>/dev/null || true) # Reset color
+
+if [ -n "$TAG" ]; then
     GIT_VERSION=$TAG
+else
+    TAG=$(git describe --exact-match --tags 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "${RED}NOTE${NC}: Not currently on a tag. Using 'edge'."
+        TAG=edge
+        GIT_VERSION=$(git rev-parse --short HEAD)
+    else
+        GIT_VERSION=$TAG
+    fi
 fi
 
 IMAGE=$IMAGE_BASE:$TAG
@@ -36,8 +45,7 @@ $THIS:
     if on a git tag and will use that for the docker image tag. Otherwise falls back
     to 'edge'.
 
-    -m: multi-platform image buld for: linux/amd64 linux/arm64 linux/arm/v7
-        - argument is ignored when run with -c
+    -m: multi-platform image build for: linux/amd64 linux/arm64
         - remember to setup a buildx container: 
             docker buildx create --name ohb --driver docker-container --use
             docker buildx inspect --bootstrap
@@ -55,16 +63,16 @@ main() {
         usage
     fi
 
-    while getopts ":p:cmh" opt; do
+    while getopts ":hmn" opt; do
         case $opt in
+            h)
+                usage
+                ;;
             m)
                 MULTI_PLATFORM=true
                 ;;
             n)
                 NOCACHE=true
-                ;;
-            h)
-                usage
                 ;;
             \?) # Handle invalid options
                 echo "Invalid option: -$OPTARG" >&2
@@ -76,6 +84,13 @@ main() {
                 ;;
         esac
     done
+    shift $((OPTIND - 1))
+
+    if [[ -n "$1" ]]; then
+        echo
+        echo "Invalid argument: $1"
+        exit 1
+    fi
 
     do_all
     build_done_message
@@ -93,13 +108,13 @@ warn_image_tag() {
             docker manifest inspect $IMAGE >/dev/null
             if [ $? -eq 0 ]; then
                 echo
-                echo "WARNING: the multiplatform docker image for '$IMAGE' already exists in Docker Hub. Please"
+                echo "${RED}WARNING${NC}: the multiplatform docker image for '$IMAGE' already exists in Docker Hub. Please"
                 echo "         remove it if you want to rebuild."
                 exit 2
             fi
         elif docker image list --format '{{.Repository}}:{{.Tag}}' | grep -qs $IMAGE; then
             echo
-            echo "WARNING: the docker image for '$IMAGE' already exists. Please remove it if you want to rebuild."
+            echo "${RED}WARNING${NC}: the docker image for '$IMAGE' already exists. Please remove it if you want to rebuild."
             exit 2
         fi
     fi
@@ -111,14 +126,18 @@ warn_local_edits() {
     LOCAL_EDITS=$?
 
     if [ $LOCAL_EDITS -ne 0 ]; then
+        if [ "$FORCE" == "true" ] || [ "$CI" == "true" ]; then
+            echo "${YELLOW}WARNING${NC}: Local edits detected, but proceeding because CI or FORCE is set."
+            return 0
+        fi
         if [ $MULTI_PLATFORM == true ]; then
             echo
-            echo "ERROR: There are local edits. stash or reset them before pushing"
+            echo "${RED}ERROR${NC}: There are local edits. stash or reset them before pushing"
             echo "       images to Docker Hub."
             exit 3
         else
             echo
-            echo "WARNING: there are local edits. If you didn't intend that, stash"
+            echo "${RED}WARNING${NC}: there are local edits. If you didn't intend that, stash"
             echo "         them and build again."
         fi
     fi
@@ -133,12 +152,12 @@ build_image() {
     echo
     echo "Building image for '$IMAGE_BASE:$TAG'"
     pushd "$HERE/.." >/dev/null
-    if [ $MULTI_PLATFORM == true ]; then
-        # only use latest on stable versions
-        if [[ $TAG =~ ^[0-9]{1,2}\.[0-9]{1,3}$ ]]; then
-            TAG_LATEST="-t $IMAGE_BASE:latest"
-        fi
+    # only use latest on stable versions
+    if [[ $TAG =~ ^[0-9]{1,2}\.[0-9]{1,3}$ ]]; then
+        TAG_LATEST="-t $IMAGE_BASE:latest"
+    fi
 
+    if [ $MULTI_PLATFORM == true ]; then
         docker buildx build \
             $NOCACHE_ARG \
             --pull \
@@ -155,6 +174,7 @@ build_image() {
             --pull \
             --build-arg GIT_VERSION=${GIT_VERSION} \
             -t $IMAGE \
+            $TAG_LATEST \
             -f docker/Dockerfile \
             .
     fi
