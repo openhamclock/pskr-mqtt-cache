@@ -1,6 +1,10 @@
 # pskr-mqtt-cache
 PSKReporter MQTT spot cache service for HamClock backends
 
+## Releases & Docker Builds
+
+For instructions on building local images and triggering releases via GitHub Actions, see [RELEASE.md](RELEASE.md).
+
 ## License
 
 Copyright (C) 2026 Open HamClock Backend (OHB) Contributors.
