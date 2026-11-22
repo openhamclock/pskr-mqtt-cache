@@ -35,7 +35,7 @@ RUN apt update && \
     pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
-FROM debian:13.4-slim AS runtime
+FROM debian:13-slim AS runtime
 
 WORKDIR /app
 
