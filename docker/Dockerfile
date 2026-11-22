@@ -20,7 +20,7 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
 # Install dependencies in a separate stage so build tools don't end up
 # in the final image.
-FROM debian:13.4-slim AS builder
+FROM debian:13-slim AS builder
 
 WORKDIR /build
 
